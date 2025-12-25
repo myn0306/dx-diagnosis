@@ -6,6 +6,8 @@
   <title>キャリア志向性診断</title>
   <script src="/_sdk/data_sdk.js"></script>
   <script src="/_sdk/element_sdk.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <style>
     * {
       box-sizing: border-box;
@@ -245,6 +247,29 @@
       color: #3b82f6;
       transform: translateY(-3px);
       box-shadow: 0 8px 20px rgba(59, 130, 246, 0.15);
+    }
+
+    .btn-pdf {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      color: white;
+      box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
+    }
+
+    .btn-pdf:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 12px 32px rgba(239, 68, 68, 0.5);
+    }
+
+    .result-buttons {
+      display: flex;
+      gap: 20px;
+      justify-content: center;
+      margin-top: 40px;
+      flex-wrap: wrap;
+    }
+
+    .result-buttons .btn {
+      min-width: 200px;
     }
 
     .result-container {
@@ -569,6 +594,49 @@
     let currentStep = 'start';
     let currentQuestionIndex = 0;
     let answers = [];
+
+    // ローカルストレージのキー
+    const STORAGE_KEY = 'career_diagnosis_progress';
+
+    // ローカルストレージに保存
+    function saveProgress() {
+      try {
+        const progress = {
+          currentStep: currentStep,
+          currentQuestionIndex: currentQuestionIndex,
+          answers: answers
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
+      } catch (error) {
+        console.error('保存エラー:', error);
+      }
+    }
+
+    // ローカルストレージから復元
+    function loadProgress() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const progress = JSON.parse(saved);
+          currentStep = progress.currentStep || 'start';
+          currentQuestionIndex = progress.currentQuestionIndex || 0;
+          answers = progress.answers || [];
+          return true;
+        }
+      } catch (error) {
+        console.error('読み込みエラー:', error);
+      }
+      return false;
+    }
+
+    // ローカルストレージをクリア
+    function clearProgress() {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch (error) {
+        console.error('クリアエラー:', error);
+      }
+    }
     
     const preQuestions = [
       {
@@ -982,6 +1050,7 @@
       currentStep = 'pre';
       currentQuestionIndex = 0;
       answers = [];
+      saveProgress();
       renderQuestion();
     }
 
@@ -1082,6 +1151,20 @@
       const actualIndex = currentStep === 'pre' 
         ? currentQuestionIndex 
         : preQuestions.length + currentQuestionIndex;
+
+      // ✅ 追加：scale（optionsありのscale質問対策）
+      if (question.type === 'scale') {
+        // 見た目：単一選択扱い
+        buttons.forEach(btn => btn.classList.remove('selected'));
+        buttons[index].classList.add('selected');
+
+        // 保存：scaleは数値で保存（1〜5想定）
+        answers[actualIndex] = index + 1;
+        saveProgress();
+
+        document.getElementById('next-btn').disabled = false;
+        return;
+      }
       
       if (question.type === 'single') {
         buttons.forEach(btn => btn.classList.remove('selected'));
@@ -1091,6 +1174,7 @@
           answers[actualIndex] = [];
         }
         answers[actualIndex] = [index];
+        saveProgress();
         
         document.getElementById('next-btn').disabled = false;
       } else if (question.type === 'multiple') {
@@ -1113,6 +1197,7 @@
           buttons[index].classList.add('selected');
         }
         
+        saveProgress();
         document.getElementById('next-btn').disabled = currentAnswers.length === 0;
       }
     }
@@ -1135,6 +1220,7 @@
         : preQuestions.length + currentQuestionIndex;
       
       answers[actualIndex] = value;
+      saveProgress();
     }
 
     function goBack() {
@@ -1144,6 +1230,7 @@
         currentStep = 'pre';
         currentQuestionIndex = preQuestions.length - 1;
       }
+      saveProgress();
       renderQuestion();
       restoreAnswers();
     }
@@ -1180,13 +1267,18 @@
       
       if (currentQuestionIndex < questions.length - 1) {
         currentQuestionIndex++;
+        saveProgress();
         renderQuestion();
         restoreAnswers();
       } else if (isPreStep && mainQuestions.length > 0) {
         currentStep = 'main';
         currentQuestionIndex = 0;
+        saveProgress();
         renderQuestion();
       } else {
+        // 診断完了時は結果画面の状態を保存
+        currentStep = 'result';
+        saveProgress();
         await calculateAndShowResult();
       }
     }
@@ -1250,8 +1342,13 @@
         }
       });
       
-      const itScorePercent = Math.round((itScore / 80) * 100);
-      const dxScorePercent = Math.round((dxScore / 85) * 100);
+      // 最大スコアを計算（各質問の最大値5点 × 重み）
+      const itMaxScore = (itPlus2Questions.length * 5 * 2) + (itPlus1Questions.length * 5 * 1);
+      const dxMaxScore = (dxPlus2Questions.length * 5 * 2) + (dxPlus1Questions.length * 5 * 1);
+      
+      // 100%を超えないように制限
+      const itScorePercent = Math.min(100, Math.round((itScore / itMaxScore) * 100));
+      const dxScorePercent = Math.min(100, Math.round((dxScore / dxMaxScore) * 100));
       
       let openness = 0;
       const opennessQuestions = [[0, 2], [4, 2], [8, 2], [21, 1]];
@@ -1564,16 +1661,101 @@ ITとDX、どちらか一方に決める必要はありません。
             </div>
           </div>
           
-          <button class="btn btn-primary" onclick="restart()">もう一度診断する</button>
+          <div class="result-buttons">
+            <button class="btn btn-pdf" onclick="downloadPDF()">📄 PDFをダウンロード</button>
+            <button class="btn btn-primary" onclick="restart()">もう一度診断する</button>
+          </div>
         </div>
       `;
     }
 
     function restart() {
+      // ローカルストレージをクリア
+      clearProgress();
       currentStep = 'start';
       currentQuestionIndex = 0;
       answers = [];
       renderStartScreen();
+    }
+
+    async function downloadPDF() {
+      try {
+        const { jsPDF } = window.jspdf;
+        const resultContainer = document.querySelector('.result-container');
+        const buttonsContainer = document.querySelector('.result-buttons');
+        
+        if (!resultContainer) {
+          alert('診断結果が見つかりません');
+          return;
+        }
+
+        // ローディング表示
+        const downloadBtn = document.querySelector('.btn-pdf');
+        const originalText = downloadBtn.textContent;
+        downloadBtn.disabled = true;
+        downloadBtn.textContent = 'PDF生成中...';
+
+        // ボタンを一時的に非表示にする
+        let buttonsDisplay = '';
+        if (buttonsContainer) {
+          buttonsDisplay = buttonsContainer.style.display;
+          buttonsContainer.style.display = 'none';
+        }
+
+        // HTMLをキャンバスに変換
+        const canvas = await html2canvas(resultContainer, {
+          scale: 1.5,
+          useCORS: true,
+          logging: false,
+          backgroundColor: '#ffffff'
+        });
+
+        const imgData = canvas.toDataURL('image/png');
+        const imgWidth = 210; // A4幅（mm）
+        const imgHeight = (canvas.height * imgWidth) / canvas.width;
+        const pageHeight = 297; // A4高さ（mm）
+
+        // 1ページに収まるようにスケール調整
+        let finalWidth = imgWidth;
+        let finalHeight = imgHeight;
+        
+        if (imgHeight > pageHeight) {
+          // 高さがA4を超える場合は、A4の高さに合わせてスケールダウン
+          const scale = pageHeight / imgHeight;
+          finalWidth = imgWidth * scale;
+          finalHeight = pageHeight;
+        }
+
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        // 中央配置
+        const x = (210 - finalWidth) / 2;
+        const y = 0;
+        
+        pdf.addImage(imgData, 'PNG', x, y, finalWidth, finalHeight);
+
+        // PDFをダウンロード
+        const fileName = `キャリア志向性診断結果_${new Date().toISOString().split('T')[0]}.pdf`;
+        pdf.save(fileName);
+
+        // ボタンを元に戻す
+        if (buttonsContainer) {
+          buttonsContainer.style.display = buttonsDisplay;
+        }
+        downloadBtn.disabled = false;
+        downloadBtn.textContent = originalText;
+      } catch (error) {
+        console.error('PDF生成エラー:', error);
+        alert('PDFの生成に失敗しました。もう一度お試しください。');
+        const downloadBtn = document.querySelector('.btn-pdf');
+        const buttonsContainer = document.querySelector('.result-buttons');
+        if (buttonsContainer) {
+          buttonsContainer.style.display = '';
+        }
+        if (downloadBtn) {
+          downloadBtn.disabled = false;
+          downloadBtn.textContent = '📄 PDFをダウンロード';
+        }
+      }
     }
 
     const dataHandler = {
@@ -1617,7 +1799,23 @@ ITとDX、どちらか一方に決める必要はありません。
         });
       }
 
-      renderStartScreen();
+      // 保存された進捗を復元
+      const hasProgress = loadProgress();
+      if (hasProgress && currentStep !== 'start') {
+        // 診断途中の場合は、該当する画面を表示
+        if (currentStep === 'pre' || currentStep === 'main') {
+          renderQuestion();
+          restoreAnswers();
+        } else if (currentStep === 'result') {
+          // 結果画面の場合は結果を再計算して表示
+          const resultData = calculateResult();
+          renderResult(resultData);
+        } else {
+          renderStartScreen();
+        }
+      } else {
+        renderStartScreen();
+      }
     }
 
     initializeApp();
